@@ -1,0 +1,97 @@
+name: integration-ci
+
+on:
+  push:
+    paths:
+      - '.gitmodules'
+      - 'deploy/**'
+      - 'tools/smoke/**'
+      - 'deploy/smoke/**'
+      - 'services/**'
+      - 'libs/**'
+      - '.github/workflows/integration-ci.yml'
+  pull_request:
+    paths:
+      - '.gitmodules'
+      - 'deploy/**'
+      - 'tools/smoke/**'
+      - 'deploy/smoke/**'
+      - 'services/**'
+      - 'libs/**'
+      - '.github/workflows/integration-ci.yml'
+
+jobs:
+  wiring:
+    runs-on: ubuntu-latest
+    env:
+      GOTOOLCHAIN: go1.26.1
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      AUTH_DB_PASSWORD: authpass
+      PDP_DB_PASSWORD: pdppass
+      REDIS_PASSWORD: redispass
+      AUTH_PUBLIC_URL: https://auth.example.test/auth
+      AUTH_DATABASE_URL: postgres://auth:authpass@postgres:5432/auth?sslmode=disable
+      AUTH_ENCRYPTION_KEY: c29tZV9iYXNlNjRfa2V5XzMyX2J5dGVzXzEyMzQ1Njc=
+      AUTH_COOKIE_DOMAIN: example.test
+      AUTH_CORS_ALLOWED_ORIGINS: https://app.example.test
+      AUTH_PROXY_TRUSTED_CIDRS: 10.0.0.0/8
+      AUTH_INTERNAL_TOKEN: auth-internal-token
+      AUTH_METRICS_TOKEN: auth-metrics-token
+      AUTH_EMAIL_VERIFICATION_INTERNAL_TOKEN: auth-verify-token
+      NOTIFICATION_BASE_URL: http://notification:8080
+      NOTIFICATION_INTERNAL_TOKEN: notification-internal-token
+      NOTIFICATION_ALLOW_INSECURE_HTTP: true
+      NOTIFICATION_QUEUE_ENCRYPTION_KEY: cXVldWVfZW5jcnlwdGlvbl9rZXlfMzJfYnl0ZXM=
+      AUDIT_BASE_URL: http://audit:8080
+      AUDIT_INTERNAL_TOKEN: audit-internal-token
+      AUDIT_ALLOW_INSECURE_HTTP: true
+      AUTH_AUDIT_SPOOL_DIR: /var/spool/auth-audit
+      PDP_AUDIT_SPOOL_DIR: /var/spool/pdp-audit
+      PDP_DB_URL: postgres://pdp:pdppass@postgres:5432/pdp?sslmode=disable
+      PDP_INTERNAL_TOKEN: pdp-internal-token
+      PDP_METRICS_TOKEN: pdp-metrics-token
+      PDP_ADMIN_TOKEN: pdp-admin-token
+      GATEWAY_TRUSTED_CIDRS: 10.0.0.0/8
+      AUTH_UPSTREAM: https://auth.internal
+      PDP_UPSTREAM: https://pdp.internal
+      GATEWAY_ALLOW_INSECURE_UPSTREAMS: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Fetch submodules when available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ secrets.SUBMODULES_TOKEN }}" ]; then
+            git config --global url."https://x-access-token:${{ secrets.SUBMODULES_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          fi
+          if ! git submodule sync --recursive || ! git submodule update --init --force --recursive; then
+            echo "Submodule checkout unavailable in this environment; continuing with root-level integration checks."
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+          check-latest: true
+          cache: true
+
+      - name: Go test tools/smoke
+        run: go test ./...
+        working-directory: tools/smoke
+
+      - name: Go test deploy/smoke
+        run: go test ./...
+        working-directory: deploy/smoke
+
+      - name: Docker compose config (dev)
+        run: docker compose -f deploy/docker-compose.yml config
+
+      - name: Docker compose config (prod)
+        run: docker compose -f deploy/docker-compose.prod.yml config

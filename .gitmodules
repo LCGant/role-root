@@ -1,0 +1,15 @@
+[submodule "services/auth"]
+	path = services/auth
+	url = https://github.com/LCGant/role-auth.git
+[submodule "services/pdp"]
+	path = services/pdp
+	url = https://github.com/LCGant/role-pdp.git
+[submodule "libs/pep"]
+	path = libs/pep
+	url = https://github.com/LCGant/role-pep.git
+[submodule "services/audit"]
+	path = services/audit
+	url = https://github.com/LCGant/role-audit.git
+[submodule "services/notification"]
+	path = services/notification
+	url = https://github.com/LCGant/role-notification.git

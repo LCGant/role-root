@@ -1,0 +1,336 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      AUTH_DB_USER: ${AUTH_DB_USER:-auth}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD}
+      AUTH_DB_NAME: ${AUTH_DB_NAME:-auth}
+      PDP_DB_USER: ${PDP_DB_USER:-pdp}
+      PDP_DB_PASSWORD: ${PDP_DB_PASSWORD:?set PDP_DB_PASSWORD}
+      PDP_DB_NAME: ${PDP_DB_NAME:-pdp}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    # Dev convenience: no auth unless REDIS_PASSWORD is set. For produção, defina REDIS_PASSWORD ou use profile prod + REDIS_HOST=redis-prod.
+    command: ["sh", "-c", "redis-server --save '' ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "redis-cli ${REDIS_PASSWORD:+-a $REDIS_PASSWORD} ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis-prod:
+    image: redis:7-alpine
+    command: ["sh", "-c", "redis-server --save '' --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?set REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+    profiles:
+      - prod
+
+  auth-migrate:
+    build:
+      context: ../services/auth
+      dockerfile: ../../deploy/auth.Dockerfile
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["timeout 180 /app/migrate"]
+    environment:
+      DATABASE_URL: ${AUTH_DATABASE_URL:-postgres://${AUTH_DB_USER:-auth}:${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD}@postgres:5432/${AUTH_DB_NAME:-auth}?sslmode=disable}
+      ENCRYPTION_KEY: ${AUTH_ENCRYPTION_KEY}
+      LOG_LEVEL: ${AUTH_LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  token-gen:
+    image: alpine:3.19
+    command: ["/bin/sh", "-c", "if [ ! -s /token/auth_internal_token ]; then head -c 32 /dev/urandom | base64 > /token/auth_internal_token; fi; if [ ! -s /token/auth_email_verification_token ]; then head -c 32 /dev/urandom | base64 > /token/auth_email_verification_token; fi; if [ ! -s /token/pdp_internal_token ]; then head -c 32 /dev/urandom | base64 > /token/pdp_internal_token; fi; if [ ! -s /token/auth_metrics_token ]; then head -c 32 /dev/urandom | base64 > /token/auth_metrics_token; fi; if [ ! -s /token/pdp_metrics_token ]; then head -c 32 /dev/urandom | base64 > /token/pdp_metrics_token; fi; if [ ! -s /token/notification_internal_token ]; then head -c 32 /dev/urandom | base64 > /token/notification_internal_token; fi; if [ ! -s /token/notification_queue_key ]; then head -c 32 /dev/urandom | base64 > /token/notification_queue_key; fi; if [ ! -s /token/audit_internal_token ]; then head -c 32 /dev/urandom | base64 > /token/audit_internal_token; fi"]
+    volumes:
+      - token_shared:/token
+    restart: "no"
+    networks:
+      - internal
+
+  auth:
+    build:
+      context: ../services/auth
+      dockerfile: ../../deploy/auth.Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: ":8080"
+      PUBLIC_URL: ${AUTH_PUBLIC_URL:-http://localhost:8080/auth}
+      DATABASE_URL: ${AUTH_DATABASE_URL:-postgres://${AUTH_DB_USER:-auth}:${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD}@postgres:5432/${AUTH_DB_NAME:-auth}?sslmode=disable}
+      ENCRYPTION_KEY: ${AUTH_ENCRYPTION_KEY:?set AUTH_ENCRYPTION_KEY}
+      COOKIE_NAME: ${AUTH_COOKIE_NAME:-session_id}
+      COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-Lax}
+      CORS_ALLOWED_ORIGINS: ${AUTH_CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CORS_ALLOW_CREDENTIALS: "true"
+      TRUST_PROXY_HEADER: ${AUTH_TRUST_PROXY_HEADER:-false}
+      PROXY_TRUSTED_CIDRS: ${AUTH_PROXY_TRUSTED_CIDRS:-}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL-}
+      LOCKOUT_REDIS_URL: ${LOCKOUT_REDIS_URL-}
+      AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN:-}
+      AUTH_EMAIL_VERIFICATION_INTERNAL_TOKEN: ${AUTH_EMAIL_VERIFICATION_INTERNAL_TOKEN:-}
+      AUTH_ENABLE_INTERNAL_EMAIL_ISSUE: ${AUTH_ENABLE_INTERNAL_EMAIL_ISSUE:-false}
+      AUTH_METRICS_TOKEN: ${AUTH_METRICS_TOKEN:-}
+      EMAIL_OUTBOX_DIR: ${AUTH_EMAIL_OUTBOX_DIR:-}
+      SMTP_HOST: ${AUTH_SMTP_HOST:-}
+      SMTP_PORT: ${AUTH_SMTP_PORT:-587}
+      SMTP_USERNAME: ${AUTH_SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${AUTH_SMTP_PASSWORD:-}
+      SMTP_FROM: ${AUTH_SMTP_FROM:-}
+      SMTP_REQUIRE_TLS: ${AUTH_SMTP_REQUIRE_TLS:-true}
+      EMAIL_VERIFICATION_URL_TEMPLATE: ${AUTH_EMAIL_VERIFICATION_URL_TEMPLATE:-}
+      PASSWORD_RESET_URL_TEMPLATE: ${AUTH_PASSWORD_RESET_URL_TEMPLATE:-}
+      NOTIFICATION_BASE_URL: ${NOTIFICATION_BASE_URL:-http://notification:8080}
+      NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN:-}
+      NOTIFICATION_ALLOW_INSECURE_HTTP: ${NOTIFICATION_ALLOW_INSECURE_HTTP:-true}
+      AUDIT_BASE_URL: ${AUDIT_BASE_URL:-http://audit:8080}
+      AUDIT_INTERNAL_TOKEN: ${AUDIT_INTERNAL_TOKEN:-}
+      AUDIT_SPOOL_DIR: ${AUTH_AUDIT_SPOOL_DIR:-/var/spool/auth-audit}
+      AUDIT_ALLOW_INSECURE_HTTP: ${AUDIT_ALLOW_INSECURE_HTTP:-true}
+      DEFAULT_TENANT_ID: ${AUTH_DEFAULT_TENANT_ID:-default}
+      LOG_LEVEL: ${AUTH_LOG_LEVEL:-info}
+    depends_on:
+      token-gen:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      notification:
+        condition: service_healthy
+      audit:
+        condition: service_healthy
+      auth-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    entrypoint: ["/bin/sh", "-c", "export AUTH_INTERNAL_TOKEN=${AUTH_INTERNAL_TOKEN:-$(cat /token/auth_internal_token 2>/dev/null)}; export AUTH_EMAIL_VERIFICATION_INTERNAL_TOKEN=${AUTH_EMAIL_VERIFICATION_INTERNAL_TOKEN:-$(cat /token/auth_email_verification_token 2>/dev/null)}; export AUTH_METRICS_TOKEN=${AUTH_METRICS_TOKEN:-$(cat /token/auth_metrics_token 2>/dev/null)}; export NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN:-$(cat /token/notification_internal_token 2>/dev/null)}; export AUDIT_INTERNAL_TOKEN=${AUDIT_INTERNAL_TOKEN:-$(cat /token/audit_internal_token 2>/dev/null)}; if [ -z \"$RATE_LIMIT_REDIS_URL\" ]; then if [ -n \"$REDIS_PASSWORD\" ]; then export RATE_LIMIT_REDIS_URL=\"redis://:${REDIS_PASSWORD}@${REDIS_HOST:-redis}:6379\"; else export RATE_LIMIT_REDIS_URL=\"redis://${REDIS_HOST:-redis}:6379\"; fi; fi; if [ -z \"$LOCKOUT_REDIS_URL\" ]; then if [ -n \"$REDIS_PASSWORD\" ]; then export LOCKOUT_REDIS_URL=\"redis://:${REDIS_PASSWORD}@${REDIS_HOST:-redis}:6379\"; else export LOCKOUT_REDIS_URL=\"redis://${REDIS_HOST:-redis}:6379\"; fi; fi; exec /app/authd"]
+    volumes:
+      - token_shared:/token
+      - auth_audit_spool:/var/spool/auth-audit
+    networks:
+      - internal
+
+  notification:
+    build:
+      context: ../services/notification
+      dockerfile: ../../deploy/notification.Dockerfile
+    restart: unless-stopped
+    environment:
+      NOTIFICATION_ENV: ${NOTIFICATION_ENV:-development}
+      NOTIFICATION_HTTP_ADDR: ":8080"
+      NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN:-}
+      NOTIFICATION_QUEUE_DIR: ${NOTIFICATION_QUEUE_DIR:-/tmp/notification-queue}
+      NOTIFICATION_QUEUE_ENCRYPTION_KEY: ${NOTIFICATION_QUEUE_ENCRYPTION_KEY:-}
+      EMAIL_OUTBOX_DIR: ${NOTIFICATION_EMAIL_OUTBOX_DIR:-/tmp/notification-outbox}
+      SMTP_HOST: ${NOTIFICATION_SMTP_HOST:-}
+      SMTP_PORT: ${NOTIFICATION_SMTP_PORT:-587}
+      SMTP_USERNAME: ${NOTIFICATION_SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${NOTIFICATION_SMTP_PASSWORD:-}
+      SMTP_FROM: ${NOTIFICATION_SMTP_FROM:-}
+      SMTP_REQUIRE_TLS: ${NOTIFICATION_SMTP_REQUIRE_TLS:-true}
+      EMAIL_VERIFICATION_URL_TEMPLATE: ${NOTIFICATION_EMAIL_VERIFICATION_URL_TEMPLATE:-}
+      PASSWORD_RESET_URL_TEMPLATE: ${NOTIFICATION_PASSWORD_RESET_URL_TEMPLATE:-}
+      NOTIFICATION_LOG_LEVEL: ${NOTIFICATION_LOG_LEVEL:-info}
+    depends_on:
+      token-gen:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c", "export NOTIFICATION_INTERNAL_TOKEN=${NOTIFICATION_INTERNAL_TOKEN:-$(cat /token/notification_internal_token 2>/dev/null)}; export NOTIFICATION_QUEUE_ENCRYPTION_KEY=${NOTIFICATION_QUEUE_ENCRYPTION_KEY:-$(cat /token/notification_queue_key 2>/dev/null)}; exec /usr/local/bin/notificationd"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - token_shared:/token
+      - notification_queue:/tmp/notification-queue
+      - notification_outbox:/tmp/notification-outbox
+    networks:
+      - internal
+
+  audit:
+    build:
+      context: ../services/audit
+      dockerfile: ../../deploy/audit.Dockerfile
+    restart: unless-stopped
+    environment:
+      AUDIT_HTTP_ADDR: ":8080"
+      AUDIT_INTERNAL_TOKEN: ${AUDIT_INTERNAL_TOKEN:-}
+      AUDIT_LOG_FILE: ${AUDIT_LOG_FILE:-/data/audit.jsonl}
+      AUDIT_LOG_LEVEL: ${AUDIT_LOG_LEVEL:-info}
+    depends_on:
+      token-gen:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-c", "export AUDIT_INTERNAL_TOKEN=${AUDIT_INTERNAL_TOKEN:-$(cat /token/audit_internal_token 2>/dev/null)}; exec /usr/local/bin/auditd"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - token_shared:/token
+      - audit_data:/data
+    networks:
+      - internal
+
+  pdp-migrate:
+    build:
+      context: ../services/pdp
+      dockerfile: ../../deploy/pdp.Dockerfile
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["timeout 180 /usr/local/bin/migrate"]
+    environment:
+      PDP_DB_URL: ${PDP_DB_URL:-postgres://${PDP_DB_USER:-pdp}:${PDP_DB_PASSWORD:?set PDP_DB_PASSWORD}@postgres:5432/${PDP_DB_NAME:-pdp}?sslmode=disable}
+      PDP_LOG_LEVEL: ${PDP_LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  pdp:
+    build:
+      context: ../services/pdp
+      dockerfile: ../../deploy/pdp.Dockerfile
+    restart: unless-stopped
+    environment:
+      PDP_HTTP_ADDR: "0.0.0.0:8080"
+      PDP_DB_URL: ${PDP_DB_URL:-postgres://${PDP_DB_USER:-pdp}:${PDP_DB_PASSWORD:?set PDP_DB_PASSWORD}@postgres:5432/${PDP_DB_NAME:-pdp}?sslmode=disable}
+      PDP_LOG_LEVEL: ${PDP_LOG_LEVEL:-info}
+      PDP_ENABLE_METRICS: "true"
+      PDP_ENABLE_OWNERSHIP: "true"
+      PDP_STEPUP_MAX_AGE: ${PDP_STEPUP_MAX_AGE:-30m}
+      PDP_INTERNAL_TOKEN: ${PDP_INTERNAL_TOKEN:-}
+      PDP_METRICS_TOKEN: ${PDP_METRICS_TOKEN:-}
+      PDP_POLICY_FILE: ${PDP_POLICY_FILE:-/app/policy.json}
+      PDP_ADMIN_TOKEN: ${PDP_ADMIN_TOKEN:?set PDP_ADMIN_TOKEN}
+      AUDIT_BASE_URL: ${AUDIT_BASE_URL:-http://audit:8080}
+      AUDIT_INTERNAL_TOKEN: ${AUDIT_INTERNAL_TOKEN:-}
+      PDP_AUDIT_SPOOL_DIR: ${PDP_AUDIT_SPOOL_DIR:-/var/spool/pdp-audit}
+      AUDIT_ALLOW_INSECURE_HTTP: ${AUDIT_ALLOW_INSECURE_HTTP:-true}
+      PDP_ENV: ${PDP_ENV:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      audit:
+        condition: service_healthy
+      pdp-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    entrypoint: ["/bin/sh", "-c", "export PDP_INTERNAL_TOKEN=${PDP_INTERNAL_TOKEN:-$(cat /token/pdp_internal_token 2>/dev/null)}; export PDP_METRICS_TOKEN=${PDP_METRICS_TOKEN:-$(cat /token/pdp_metrics_token 2>/dev/null)}; export AUDIT_INTERNAL_TOKEN=${AUDIT_INTERNAL_TOKEN:-$(cat /token/audit_internal_token 2>/dev/null)}; exec /usr/local/bin/pdpd"]
+    volumes:
+      - ../services/pdp/policy.json:/app/policy.json:ro
+      - token_shared:/token
+      - pdp_audit_spool:/var/spool/pdp-audit
+    networks:
+      - internal
+
+  gateway:
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      GATEWAY_HTTP_ADDR: ${GATEWAY_HTTP_ADDR:-:8080}
+      AUTH_UPSTREAM: ${AUTH_UPSTREAM:-http://auth:8080}
+      PDP_UPSTREAM: ${PDP_UPSTREAM:-http://pdp:8080}
+      GATEWAY_READ_HEADER_TIMEOUT: ${GATEWAY_READ_HEADER_TIMEOUT:-5s}
+      GATEWAY_READ_TIMEOUT: ${GATEWAY_READ_TIMEOUT:-15s}
+      GATEWAY_WRITE_TIMEOUT: ${GATEWAY_WRITE_TIMEOUT:-15s}
+      GATEWAY_IDLE_TIMEOUT: ${GATEWAY_IDLE_TIMEOUT:-60s}
+      GATEWAY_MAX_BODY_BYTES: ${GATEWAY_MAX_BODY_BYTES:-1048576}
+      GATEWAY_RATE_LIMIT_RPS: ${GATEWAY_RATE_LIMIT_RPS:-50}
+      GATEWAY_RATE_LIMIT_BURST: ${GATEWAY_RATE_LIMIT_BURST:-100}
+      GATEWAY_ENABLE_PDP_ADMIN: ${GATEWAY_ENABLE_PDP_ADMIN:-false}
+      GATEWAY_TRUSTED_CIDRS: ${GATEWAY_TRUSTED_CIDRS:-}
+      GATEWAY_ALLOW_INSECURE_UPSTREAMS: ${GATEWAY_ALLOW_INSECURE_UPSTREAMS:?set true only for isolated internal HTTP upstreams}
+    depends_on:
+      auth:
+        condition: service_healthy
+      pdp:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - internal
+      - public
+
+  smoke:
+    build:
+      context: ../tools/smoke
+      dockerfile: ./Dockerfile
+    environment:
+      SMOKE_BASE_URL: http://gateway:8080
+      SMOKE_AUTH_BASE_URL: http://auth:8080
+      SMOKE_PDP_BASE_URL: http://pdp:8080
+      SMOKE_TIMEOUT: 90s
+      SMOKE_SESSION_COOKIE: ${AUTH_COOKIE_NAME:-session_id}
+      SMOKE_AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN:-}
+      SMOKE_NOTIFICATION_OUTBOX_DIR: /outbox
+      SMOKE_PDP_INTERNAL_TOKEN: ${PDP_INTERNAL_TOKEN:-}
+    depends_on:
+      token-gen:
+        condition: service_completed_successfully
+      gateway:
+        condition: service_healthy
+    networks:
+      - internal
+    restart: "no"
+    profiles:
+      - smoke
+    entrypoint: ["/bin/sh", "-c", "export SMOKE_AUTH_INTERNAL_TOKEN=${SMOKE_AUTH_INTERNAL_TOKEN:-$(cat /token/auth_internal_token 2>/dev/null)}; export SMOKE_PDP_INTERNAL_TOKEN=${SMOKE_PDP_INTERNAL_TOKEN:-$(cat /token/pdp_internal_token 2>/dev/null)}; exec /app/smoke"]
+    volumes:
+      - token_shared:/token
+      - notification_outbox:/outbox:ro
+
+volumes:
+  postgres_data:
+  token_shared:
+  notification_outbox:
+  notification_queue:
+  auth_audit_spool:
+  pdp_audit_spool:
+  audit_data:
+
+networks:
+  internal:
+    internal: true
+  public: {}

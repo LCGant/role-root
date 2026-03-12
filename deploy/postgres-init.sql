@@ -1,0 +1,2 @@
+-- Deprecated: use deploy/postgres-init.sh.
+-- This file is intentionally left without credentials to avoid hardcoded secrets.

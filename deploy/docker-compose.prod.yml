@@ -1,0 +1,268 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
+      AUTH_DB_USER: ${AUTH_DB_USER:-auth}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD}
+      AUTH_DB_NAME: ${AUTH_DB_NAME:-auth}
+      PDP_DB_USER: ${PDP_DB_USER:-pdp}
+      PDP_DB_PASSWORD: ${PDP_DB_PASSWORD:?set PDP_DB_PASSWORD}
+      PDP_DB_NAME: ${PDP_DB_NAME:-pdp}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    command: ["sh", "-c", "redis-server --save '' --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?set REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal
+
+  auth-migrate:
+    build:
+      context: ../services/auth
+      dockerfile: ../../deploy/auth.Dockerfile
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["timeout 180 /app/migrate"]
+    environment:
+      DATABASE_URL: ${AUTH_DATABASE_URL:-postgres://${AUTH_DB_USER:-auth}:${AUTH_DB_PASSWORD:?set AUTH_DB_PASSWORD}@postgres:5432/${AUTH_DB_NAME:-auth}?sslmode=disable}
+      ENCRYPTION_KEY: ${AUTH_ENCRYPTION_KEY}
+      LOG_LEVEL: ${AUTH_LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  auth:
+    build:
+      context: ../services/auth
+      dockerfile: ../../deploy/auth.Dockerfile
+    restart: unless-stopped
+    environment:
+      PORT: ":8080"
+      PUBLIC_URL: ${AUTH_PUBLIC_URL:?set AUTH_PUBLIC_URL}
+      DATABASE_URL: ${AUTH_DATABASE_URL:?set AUTH_DATABASE_URL}
+      ENCRYPTION_KEY: ${AUTH_ENCRYPTION_KEY:?set AUTH_ENCRYPTION_KEY}
+      COOKIE_NAME: ${AUTH_COOKIE_NAME:-session_id}
+      COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:?set AUTH_COOKIE_DOMAIN}
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: ${AUTH_COOKIE_SAMESITE:-Lax}
+      CORS_ALLOWED_ORIGINS: ${AUTH_CORS_ALLOWED_ORIGINS:?set AUTH_CORS_ALLOWED_ORIGINS}
+      CORS_ALLOW_CREDENTIALS: "true"
+      TRUST_PROXY_HEADER: "true"
+      PROXY_TRUSTED_CIDRS: ${AUTH_PROXY_TRUSTED_CIDRS:?set AUTH_PROXY_TRUSTED_CIDRS}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL-}
+      LOCKOUT_REDIS_URL: ${LOCKOUT_REDIS_URL-}
+      AUTH_INTERNAL_TOKEN: ${AUTH_INTERNAL_TOKEN:?set AUTH_INTERNAL_TOKEN}
+      AUTH_EMAIL_VERIFICATION_INTERNAL_TOKEN: ${AUTH_EMAIL_VERIFICATION_INTERNAL_TOKEN:-}
+      AUTH_ENABLE_INTERNAL_EMAIL_ISSUE: ${AUTH_ENABLE_INTERNAL_EMAIL_ISSUE:-false}
+      AUTH_METRICS_TOKEN: ${AUTH_METRICS_TOKEN:?set AUTH_METRICS_TOKEN}
+      EMAIL_OUTBOX_DIR: ${AUTH_EMAIL_OUTBOX_DIR:-}
+      SMTP_HOST: ${AUTH_SMTP_HOST:-}
+      SMTP_PORT: ${AUTH_SMTP_PORT:-587}
+      SMTP_USERNAME: ${AUTH_SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${AUTH_SMTP_PASSWORD:-}
+      SMTP_FROM: ${AUTH_SMTP_FROM:-}
+      SMTP_REQUIRE_TLS: ${AUTH_SMTP_REQUIRE_TLS:-true}
+      EMAIL_VERIFICATION_URL_TEMPLATE: ${AUTH_EMAIL_VERIFICATION_URL_TEMPLATE:-}
+      PASSWORD_RESET_URL_TEMPLATE: ${AUTH_PASSWORD_RESET_URL_TEMPLATE:-}
+      NOTIFICATION_BASE_URL: ${NOTIFICATION_BASE_URL:?set NOTIFICATION_BASE_URL}
+      NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN:?set NOTIFICATION_INTERNAL_TOKEN}
+      NOTIFICATION_ALLOW_INSECURE_HTTP: ${NOTIFICATION_ALLOW_INSECURE_HTTP:-false}
+      AUDIT_BASE_URL: ${AUDIT_BASE_URL:?set AUDIT_BASE_URL}
+      AUDIT_INTERNAL_TOKEN: ${AUDIT_INTERNAL_TOKEN:?set AUDIT_INTERNAL_TOKEN}
+      AUDIT_ALLOW_INSECURE_HTTP: ${AUDIT_ALLOW_INSECURE_HTTP:-false}
+      AUDIT_SPOOL_DIR: ${AUTH_AUDIT_SPOOL_DIR:-/var/spool/auth-audit}
+      DEFAULT_TENANT_ID: ${AUTH_DEFAULT_TENANT_ID:-default}
+      LOG_LEVEL: ${AUTH_LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      notification:
+        condition: service_healthy
+      audit:
+        condition: service_healthy
+      auth-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - auth_audit_spool:/var/spool/auth-audit
+    entrypoint: ["/bin/sh", "-c", "if [ -z \"$RATE_LIMIT_REDIS_URL\" ]; then export RATE_LIMIT_REDIS_URL=\"redis://:${REDIS_PASSWORD}@${REDIS_HOST:-redis}:6379\"; fi; if [ -z \"$LOCKOUT_REDIS_URL\" ]; then export LOCKOUT_REDIS_URL=\"redis://:${REDIS_PASSWORD}@${REDIS_HOST:-redis}:6379\"; fi; exec /app/authd"]
+    networks:
+      - internal
+
+  notification:
+    build:
+      context: ../services/notification
+      dockerfile: ../../deploy/notification.Dockerfile
+    restart: unless-stopped
+    environment:
+      NOTIFICATION_ENV: ${NOTIFICATION_ENV:-production}
+      NOTIFICATION_HTTP_ADDR: ":8080"
+      NOTIFICATION_INTERNAL_TOKEN: ${NOTIFICATION_INTERNAL_TOKEN:?set NOTIFICATION_INTERNAL_TOKEN}
+      NOTIFICATION_QUEUE_DIR: ${NOTIFICATION_QUEUE_DIR:-/var/spool/notification}
+      NOTIFICATION_QUEUE_ENCRYPTION_KEY: ${NOTIFICATION_QUEUE_ENCRYPTION_KEY:?set NOTIFICATION_QUEUE_ENCRYPTION_KEY}
+      EMAIL_OUTBOX_DIR: ${NOTIFICATION_EMAIL_OUTBOX_DIR:-}
+      SMTP_HOST: ${NOTIFICATION_SMTP_HOST:-}
+      SMTP_PORT: ${NOTIFICATION_SMTP_PORT:-587}
+      SMTP_USERNAME: ${NOTIFICATION_SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${NOTIFICATION_SMTP_PASSWORD:-}
+      SMTP_FROM: ${NOTIFICATION_SMTP_FROM:-}
+      SMTP_REQUIRE_TLS: ${NOTIFICATION_SMTP_REQUIRE_TLS:-true}
+      EMAIL_VERIFICATION_URL_TEMPLATE: ${NOTIFICATION_EMAIL_VERIFICATION_URL_TEMPLATE:-}
+      PASSWORD_RESET_URL_TEMPLATE: ${NOTIFICATION_PASSWORD_RESET_URL_TEMPLATE:-}
+      NOTIFICATION_LOG_LEVEL: ${NOTIFICATION_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - notification_queue:/var/spool/notification
+    networks:
+      - internal
+
+  audit:
+    build:
+      context: ../services/audit
+      dockerfile: ../../deploy/audit.Dockerfile
+    restart: unless-stopped
+    environment:
+      AUDIT_HTTP_ADDR: ":8080"
+      AUDIT_INTERNAL_TOKEN: ${AUDIT_INTERNAL_TOKEN:?set AUDIT_INTERNAL_TOKEN}
+      AUDIT_LOG_FILE: ${AUDIT_LOG_FILE:-/data/audit.jsonl}
+      AUDIT_LOG_LEVEL: ${AUDIT_LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - audit_data:/data
+    networks:
+      - internal
+
+  pdp-migrate:
+    build:
+      context: ../services/pdp
+      dockerfile: ../../deploy/pdp.Dockerfile
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["timeout 180 /usr/local/bin/migrate"]
+    environment:
+      PDP_DB_URL: ${PDP_DB_URL:-postgres://${PDP_DB_USER:-pdp}:${PDP_DB_PASSWORD:?set PDP_DB_PASSWORD}@postgres:5432/${PDP_DB_NAME:-pdp}?sslmode=disable}
+      PDP_LOG_LEVEL: ${PDP_LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  pdp:
+    build:
+      context: ../services/pdp
+      dockerfile: ../../deploy/pdp.Dockerfile
+    restart: unless-stopped
+    environment:
+      PDP_HTTP_ADDR: "0.0.0.0:8080"
+      PDP_DB_URL: ${PDP_DB_URL:-postgres://${PDP_DB_USER:-pdp}:${PDP_DB_PASSWORD:?set PDP_DB_PASSWORD}@postgres:5432/${PDP_DB_NAME:-pdp}?sslmode=disable}
+      PDP_LOG_LEVEL: ${PDP_LOG_LEVEL:-info}
+      PDP_ENABLE_METRICS: "true"
+      PDP_ENABLE_OWNERSHIP: "true"
+      PDP_STEPUP_MAX_AGE: ${PDP_STEPUP_MAX_AGE:-30m}
+      PDP_INTERNAL_TOKEN: ${PDP_INTERNAL_TOKEN:?set PDP_INTERNAL_TOKEN}
+      PDP_METRICS_TOKEN: ${PDP_METRICS_TOKEN:?set PDP_METRICS_TOKEN}
+      PDP_POLICY_FILE: ${PDP_POLICY_FILE:-/app/policy.json}
+      PDP_ADMIN_TOKEN: ${PDP_ADMIN_TOKEN:?set PDP_ADMIN_TOKEN}
+      AUDIT_BASE_URL: ${AUDIT_BASE_URL:?set AUDIT_BASE_URL}
+      AUDIT_INTERNAL_TOKEN: ${AUDIT_INTERNAL_TOKEN:?set AUDIT_INTERNAL_TOKEN}
+      AUDIT_ALLOW_INSECURE_HTTP: ${AUDIT_ALLOW_INSECURE_HTTP:-false}
+      PDP_AUDIT_SPOOL_DIR: ${PDP_AUDIT_SPOOL_DIR:-/var/spool/pdp-audit}
+      PDP_ENV: ${PDP_ENV:-production}
+    volumes:
+      - ../services/pdp/policy.json:/app/policy.json:ro
+      - pdp_audit_spool:/var/spool/pdp-audit
+    depends_on:
+      postgres:
+        condition: service_healthy
+      audit:
+        condition: service_healthy
+      pdp-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - internal
+
+  gateway:
+    build:
+      context: ../gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      GATEWAY_HTTP_ADDR: ${GATEWAY_HTTP_ADDR:-:8080}
+      AUTH_UPSTREAM: ${AUTH_UPSTREAM:?set AUTH_UPSTREAM}
+      PDP_UPSTREAM: ${PDP_UPSTREAM:?set PDP_UPSTREAM}
+      GATEWAY_READ_HEADER_TIMEOUT: ${GATEWAY_READ_HEADER_TIMEOUT:-5s}
+      GATEWAY_READ_TIMEOUT: ${GATEWAY_READ_TIMEOUT:-15s}
+      GATEWAY_WRITE_TIMEOUT: ${GATEWAY_WRITE_TIMEOUT:-15s}
+      GATEWAY_IDLE_TIMEOUT: ${GATEWAY_IDLE_TIMEOUT:-60s}
+      GATEWAY_MAX_BODY_BYTES: ${GATEWAY_MAX_BODY_BYTES:-1048576}
+      GATEWAY_RATE_LIMIT_RPS: ${GATEWAY_RATE_LIMIT_RPS:-50}
+      GATEWAY_RATE_LIMIT_BURST: ${GATEWAY_RATE_LIMIT_BURST:-100}
+      GATEWAY_ENABLE_PDP_ADMIN: ${GATEWAY_ENABLE_PDP_ADMIN:-false}
+      GATEWAY_TRUSTED_CIDRS: ${GATEWAY_TRUSTED_CIDRS:?set GATEWAY_TRUSTED_CIDRS}
+      GATEWAY_ALLOW_INSECURE_UPSTREAMS: ${GATEWAY_ALLOW_INSECURE_UPSTREAMS:?set true only for isolated internal HTTP upstreams}
+    depends_on:
+      auth:
+        condition: service_healthy
+      pdp:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - internal
+      - public
+
+volumes:
+  postgres_data:
+  token_shared:
+  auth_audit_spool:
+  notification_queue:
+  audit_data:
+  pdp_audit_spool:
+
+networks:
+  internal:
+    internal: true
+  public: {}
