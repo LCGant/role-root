@@ -1,29 +1,7 @@
-﻿# Gateway
+# Gateway
 
-[Leia em Portugues](README.pt-BR.md) | [Project root](../README.md)
+[Leia em Portugues](README.pt-BR.md) | [Workspace root](../README.md)
 
-The gateway is the public edge of the platform. It terminates client traffic, applies HTTP hardening, blocks internal-only paths, and proxies allowed traffic to internal services.
+The authoritative gateway repository now lives at [`role-gateway`](https://github.com/LCGant/role-gateway).
 
-## Responsibilities
-
-- expose the public HTTP entry point
-- route user-facing auth traffic to `auth`
-- route public authorization-aware application traffic to downstream services
-- block direct access to internal-only paths such as `auth/internal`, `pdp` decision endpoints, `notification`, and `audit`
-- enforce request size limits, timeouts, security headers, and rate limiting
-
-## What it is not
-
-The gateway is not a second auth service and it is not the place for business authorization logic. Authentication stays in `auth`. Policy decisions stay in `pdp`.
-
-## Security posture
-
-- fail-closed on invalid upstream configuration
-- explicit handling for trusted proxy CIDRs
-- request body limits before proxying
-- security headers via shared middleware
-- public route surface kept intentionally narrow
-
-## Status
-
-This component is usable and security-focused. It is still a starting point, not a finished edge platform. Teams adopting it should expect to refine observability, operational controls, and deployment-specific proxy/TLS behavior.
+This directory remains in `role-root` only as part of the workspace layout used for deploy assets and integrated smoke tooling. If you want gateway-specific documentation, examples, and CI status, read the dedicated repository instead of treating this copy as the primary source of truth.
