@@ -260,7 +260,7 @@ services:
 
   gateway:
     build:
-      context: ../gateway
+      context: ../role-gateway/gateway
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
@@ -295,8 +295,8 @@ services:
 
   smoke:
     build:
-      context: ../tools/smoke
-      dockerfile: ./Dockerfile
+      context: ../role-gateway/tools/smoke
+      dockerfile: Dockerfile
     environment:
       SMOKE_BASE_URL: http://gateway:8080
       SMOKE_AUTH_BASE_URL: http://auth:8080

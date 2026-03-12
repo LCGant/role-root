@@ -2,13 +2,13 @@
 
 [Read in English](README.md)
 
-Role Root e o repositorio de workspace da plataforma. Ele conecta deploy, smoke tooling, wiring de integracao e os repositorios que implementam os servicos de seguranca.
+Role Root e o repositorio de workspace da plataforma. Ele conecta deploy, wiring de integracao e os repositorios que implementam os servicos de seguranca.
 
 Este repositorio deve ser visto como o ponto de coordenacao da plataforma, nao como o unico lugar onde o codigo vive.
 
 ## Repositorios
 
-- [`role-root`](https://github.com/LCGant/role-root): workspace, deploy, docs, smoke tooling e cola de orquestracao
+- [`role-root`](https://github.com/LCGant/role-root): workspace, deploy, docs e cola de orquestracao
 - [`role-gateway`](https://github.com/LCGant/role-gateway): base de gateway e servico de borda publica
 - [`role-auth`](https://github.com/LCGant/role-auth): base de autenticacao
 - [`role-pdp`](https://github.com/LCGant/role-pdp): base de decisao de autorizacao
@@ -19,9 +19,8 @@ Este repositorio deve ser visto como o ponto de coordenacao da plataforma, nao c
 ## O que existe neste repositorio
 
 - `deploy`: Dockerfiles, Compose, bootstrap e scripts operacionais
-- `tools/smoke`: smoke checks do stack integrado
 - `docs`: invariantes de seguranca, checklist de producao e notas operacionais
-- referencias de workspace para os repositorios de servico listados acima
+- referencias via submodulo para os repositorios de servico listados acima, incluindo `role-gateway`
 
 ## Estado do projeto
 

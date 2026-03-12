@@ -5,8 +5,9 @@ on:
     paths:
       - '.gitmodules'
       - 'deploy/**'
-      - 'tools/smoke/**'
       - 'deploy/smoke/**'
+      - 'role-gateway'
+      - 'role-gateway/**'
       - 'services/**'
       - 'libs/**'
       - '.github/workflows/integration-ci.yml'
@@ -14,8 +15,9 @@ on:
     paths:
       - '.gitmodules'
       - 'deploy/**'
-      - 'tools/smoke/**'
       - 'deploy/smoke/**'
+      - 'role-gateway'
+      - 'role-gateway/**'
       - 'services/**'
       - 'libs/**'
       - '.github/workflows/integration-ci.yml'
@@ -82,9 +84,9 @@ jobs:
           check-latest: true
           cache: true
 
-      - name: Go test tools/smoke
+      - name: Go test role-gateway/tools/smoke
         run: go test ./...
-        working-directory: tools/smoke
+        working-directory: role-gateway/tools/smoke
 
       - name: Go test deploy/smoke
         run: go test ./...
