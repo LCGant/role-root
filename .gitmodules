@@ -13,3 +13,6 @@
 [submodule "services/notification"]
 	path = services/notification
 	url = https://github.com/LCGant/role-notification.git
+[submodule "role-gateway"]
+	path = role-gateway
+	url = https://github.com/LCGant/role-gateway.git
